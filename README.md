@@ -96,65 +96,65 @@ The pipeline consists of multiple stages, from crawling the official portal to s
 
 1. **Airflow DAG (`dvc_flow.py`)** is triggered periodically:
    - Trigger: The DAG is scheduled by Airflow (e.g., daily at 8:00 AM).
-![img_6.png](images%2Fimg_6.png)
+      ![img_6.png](images%2Fimg_6.png)
    - Step 1: Python script calls the Vietnamese drug portal API or scrapes HTML to fetch the latest drug records.
    - Step 2: Compare each record's lastModificationTime with the last crawl timestamp stored in the DB. Only new or updated records are processed further.
    - Step3: Sends only new/updated records to Kafka topic `all_data`
-```python
-
-def extract_dvc_data():
-    job_name = "extract_data_from_DVC"
-    last_crawl_time = get_last_crawl_time(job_name)
-
-    if last_crawl_time:
-        if last_crawl_time.tzinfo is None:
-            last_crawl_time = last_crawl_time.replace(tzinfo=timezone.utc)
-
-    total_count = get_total_count()
-    if total_count is None:
-        raise ValueError("Total count is not available.")
-    # all_data = []
-    skip_count = 0
-
-    producer = KafkaProducer(bootstrap_servers=['kafka:9092'], max_block_ms=5000)
-    while skip_count < 1000:
-        # total_count+100:
-
-        try:
-            data = get_data_per_page(skip_count)
-            if data is None:
-                print(f"Skipping page with skip_count {skip_count} due to failure")
-                time.sleep(5)  # Wait before retrying
-                continue
-            data_formated = format_data(data, last_crawl_time)
-            print(f"Fetched {skip_count + 100}/{total_count}")
-
-            skip_count += 100
-            time.sleep(1)  # Adjust as needed
-
-            json_rows = json.dumps(data_formated, ensure_ascii=False).encode('utf-8')
-
-            producer.send('all_data', json_rows)
-            producer.flush()
-            print('message sent')
-        except Exception as e:
-            logging.error(f'An error occured: {e}')
-            continue
-```
-   
+      ```python
+      
+      def extract_dvc_data():
+          job_name = "extract_data_from_DVC"
+          last_crawl_time = get_last_crawl_time(job_name)
+      
+          if last_crawl_time:
+              if last_crawl_time.tzinfo is None:
+                  last_crawl_time = last_crawl_time.replace(tzinfo=timezone.utc)
+      
+          total_count = get_total_count()
+          if total_count is None:
+              raise ValueError("Total count is not available.")
+          # all_data = []
+          skip_count = 0
+      
+          producer = KafkaProducer(bootstrap_servers=['kafka:9092'], max_block_ms=5000)
+          while skip_count < 1000:
+              # total_count+100:
+      
+              try:
+                  data = get_data_per_page(skip_count)
+                  if data is None:
+                      print(f"Skipping page with skip_count {skip_count} due to failure")
+                      time.sleep(5)  # Wait before retrying
+                      continue
+                  data_formated = format_data(data, last_crawl_time)
+                  print(f"Fetched {skip_count + 100}/{total_count}")
+      
+                  skip_count += 100
+                  time.sleep(1)  # Adjust as needed
+      
+                  json_rows = json.dumps(data_formated, ensure_ascii=False).encode('utf-8')
+      
+                  producer.send('all_data', json_rows)
+                  producer.flush()
+                  print('message sent')
+              except Exception as e:
+                  logging.error(f'An error occured: {e}')
+                  continue
+      ```
+         
 
 2. **Kafka Producer** (in DAG) streams filtered data in JSON format.
 - Kafka acts as the message broker to decouple the crawling process from downstream processing.
 - Any consumer (like Spark) can subscribe to the topic all_data and process records in near real-time.
 
-![img_8.png](images%2Fimg_8.png)
+   ![img_8.png](images%2Fimg_8.png)
 
 3. **Spark Structured Streaming** (inside `spark/main.py`) reads from Kafka:
    - Spark Structured Streaming reads from Kafka continuously.
 
    - JSON records are parsed according to the predefined schema and transformed into a normalized DataFrame.
-![img_9.png](images%2Fimg_9.png)
-![img_10.png](images%2Fimg_10.png)
+    ![img_9.png](images%2Fimg_9.png)
+    ![img_10.png](images%2Fimg_10.png)
    
 4. **Spark → PostgreSQL**
    - Spark writes transformed batch data to PostgreSQL via JDBC
@@ -179,52 +179,52 @@ def extract_dvc_data():
       ```
    - Data is inserted or upserted using custom logic in `upsert_to_main_table.py`
    
-```python
+   ```python
+      
+   def upsert_to_main_table():
+       conn = None
+       try:
+           # connect to PostgreSQL
+           conn = psycopg2.connect(
+               dbname="postgres",
+               user="postgres",
+               password="123456",
+               host="host.docker.internal",
+               port="5432"
+           )
+           cursor = conn.cursor()
    
-def upsert_to_main_table():
-    conn = None
-    try:
-        # connect to PostgreSQL
-        conn = psycopg2.connect(
-            dbname="postgres",
-            user="postgres",
-            password="123456",
-            host="host.docker.internal",
-            port="5432"
-        )
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            INSERT INTO pharmaceutical_data AS main
-            
-            SELECT DISTINCT ON (soDangKy) * 
-            FROM pharmaceutical_data_staging
-            ORDER BY soDangKy, lastModificationTime DESC
-            ON CONFLICT (soDangKy)
-            
-            DO UPDATE SET
-                idThuoc = EXCLUDED.idThuoc,
-                phanLoaiThuocEnum = EXCLUDED.phanLoaiThuocEnum,
-                tenCongTyDangKy = EXCLUDED.tenCongTyDangKy,
-                diaChiDangKy = EXCLUDED.diaChiDangKy,
-                nuocDangKy = EXCLUDED.nuocDangKy,
-                congTyDangKyId = EXCLUDED.congTyDangKyId,
-               ...
-
-            """)
-
-        print("Table upsert successfully in PostgreSQL")
-        cursor.execute("TRUNCATE TABLE pharmaceutical_data_staging;")
-        print("Truncated staging table successfully")
-
-        conn.commit()
-        cursor.close()
-    except (Exception, psycopg2.DatabaseError) as error:
-        print(f"Error: {error}")
-    finally:
-        if conn is not None:
-            conn.close()
-```
+           cursor.execute("""
+               INSERT INTO pharmaceutical_data AS main
+               
+               SELECT DISTINCT ON (soDangKy) * 
+               FROM pharmaceutical_data_staging
+               ORDER BY soDangKy, lastModificationTime DESC
+               ON CONFLICT (soDangKy)
+               
+               DO UPDATE SET
+                   idThuoc = EXCLUDED.idThuoc,
+                   phanLoaiThuocEnum = EXCLUDED.phanLoaiThuocEnum,
+                   tenCongTyDangKy = EXCLUDED.tenCongTyDangKy,
+                   diaChiDangKy = EXCLUDED.diaChiDangKy,
+                   nuocDangKy = EXCLUDED.nuocDangKy,
+                   congTyDangKyId = EXCLUDED.congTyDangKyId,
+                  ...
+   
+               """)
+   
+           print("Table upsert successfully in PostgreSQL")
+           cursor.execute("TRUNCATE TABLE pharmaceutical_data_staging;")
+           print("Truncated staging table successfully")
+   
+           conn.commit()
+           cursor.close()
+       except (Exception, psycopg2.DatabaseError) as error:
+           print(f"Error: {error}")
+       finally:
+           if conn is not None:
+               conn.close()
+   ```
 5. **Airflow DAG (`upsert_dag.py`)** updates the main table in DB with new records.
 ![img_14.png](images%2Fimg_14.png)
 ---
@@ -257,7 +257,6 @@ docker exec -it kafka kafka-topics --list --bootstrap-server kafka:9092
 ```
 ![img_5.png](images%2Fimg_5.png)
 
-💡 Suggested image: Kafka topic all_data visible in terminal or Confluent Control Center.
 
 ### 4. Setup Spark and PostgreSQL Integration
 🐘 Install PostgreSQL driver inside Spark container
@@ -278,9 +277,9 @@ Open Airflow UI at http://localhost:8080
 
 Trigger:
 
-1. Open Airflow UI at http://localhost:8080
+#### 1. Open Airflow UI at http://localhost:8080
 
-2. Trigger dvc_flow DAG – this will:
+#### 2. Trigger dvc_flow DAG – this will:
 
 - Crawl new data from the official portal
 
@@ -291,14 +290,15 @@ Trigger:
 - Transform the data using Spark Structured Streaming (parse JSON, normalize fields, explode nested data)
 
 - Insert transformed records into the staging table in PostgreSQL
-![img_13.png](images%2Fimg_13.png)
 
-3. Trigger upsert_dag DAG – this will:
+   ![img_13.png](images%2Fimg_13.png)
 
-- Read data from staging table
+#### 3. Trigger upsert_dag DAG – this will:
 
-- Upsert into the main table
-![img_12.png](images%2Fimg_12.png)
+   - Read data from staging table
+
+   - Upsert into the main table
+   ![img_12.png](images%2Fimg_12.png)
 
 ## ✅ Features
 Incremental data crawling based on lastModificationTime
@@ -312,15 +312,6 @@ PostgreSQL upsert logic for deduplication
 Modular codebase for easy maintenance
 
 
-## 🛠️ Tech Stack
-Component	Tool
-Orchestration	Apache Airflow
-Data Versioning	DVC
-Message Queue	Apache Kafka
-Stream Processing	Apache Spark
-Database	PostgreSQL
-Deployment	Docker Compose
-Language	Python (3.8+)
 
 ## 👨‍💻 Author
 Diu Nguyen
