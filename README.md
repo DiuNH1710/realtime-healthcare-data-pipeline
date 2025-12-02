@@ -319,6 +319,4 @@ Diu Nguyen
 Data Engineer | Fullstack Developer
 
 📧 nguyenhuongdiu1710@gmail.com
-## 📄 License
-This project is for educational and personal learning purposes.
 
