@@ -1,4 +1,4 @@
-# 💊 Real-Time Healthcare Data Streaming Pipeline
+# 💊 Healthcare Data Ingestion & Real-Time Streaming Pipeline
 This project implements a **real-time ingestion, transformation, and analytics pipeline** for pharmaceutical data in Vietnam.
 It automatically **crawls, streams, processes, and stores official drug information** from the Vietnamese pharmaceutical regulatory portal:
 
